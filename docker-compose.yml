@@ -1,0 +1,31 @@
+services:
+  stripe-mock:
+    # Stripe公式のモックサーバ。E2E・統合テストでStripe APIを本物なしで叩けます。
+    # 出典: https://github.com/stripe/stripe-mock
+    image: stripe/stripe-mock:latest
+    ports:
+      - "12111:12111"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:12111/v1/customers || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  db:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: kessai
+      POSTGRES_USER: kessai
+      POSTGRES_PASSWORD: kessai_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kessai -d kessai"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  db_data:

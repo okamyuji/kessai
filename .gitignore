@@ -1,0 +1,14 @@
+.env
+*.local
+/bin/
+/tmp/
+.DS_Store
+node_modules/
+/web/static/tailwind-build.css
+.worktrees/
+
+docs/_quality/
+coverage.out
+/test/e2e/node_modules/
+/test/e2e/test-results/
+/test/e2e/playwright-report/

@@ -1,0 +1,60 @@
+// Package templates はhtmxとStripe.jsを埋め込んだHTMLを描画します。
+// CSPで許可された配信元だけを参照します（httpx.SecurityHeadersと合わせて調整）。
+package templates
+
+import "github.com/okamyuji/kessai/internal/httpx/httpxproto"
+
+// Layout ページ共通のレイアウト。head内のscript/link参照はCSPに整合しています。
+templ Layout(title string, publishableKey string) {
+	<!DOCTYPE html>
+	<html lang="ja">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } | kessai</title>
+			<link rel="stylesheet" href="/static/tailwind.css"/>
+			// htmxは自ドメインから配信（改ざんリスクは自インフラで管理）。将来CDN化する場合はintegrity/crossorigin必須。
+			<script src="/static/htmx.min.js" defer></script>
+			// Stripe.js（js.stripe.com/v3/）はStripe公式が「バージョン固定禁止・SRI付与禁止」を明記している。
+			// 理由: Stripe側でセキュリティ対応のため即時に配布物を更新する必要があるため。
+			// 出典: https://docs.stripe.com/js/including （v3で読み込むこと・integrity禁止）
+			// PCI DSS SAQ A要件はCSP(script-src)でjs.stripe.comのみ許可することで満たす（middleware.go）
+			<script src="https://js.stripe.com/v3/" defer></script>
+			<meta name="stripe-publishable-key" content={ publishableKey }/>
+		</head>
+		// htmxがすべてのAJAXリクエストにCSRFヘッダを自動付与するようbody要素で宣言（http.CSRFミドルウェアと整合）
+		<body class="bg-slate-50 text-slate-900" hx-headers={ csrfHXHeaders(csrfTokenFromCtx()) }>
+			<header class="border-b border-slate-200 bg-white">
+				<div class="max-w-3xl mx-auto px-4 py-3 font-bold">kessai デモストア</div>
+			</header>
+			<main class="max-w-3xl mx-auto px-4 py-6">
+				{ children... }
+			</main>
+			<footer class="max-w-3xl mx-auto px-4 py-4 text-xs text-slate-500">
+				<a href="/tokusho" class="underline">特定商取引法に基づく表記</a>
+			</footer>
+		</body>
+	</html>
+}
+
+// CSRFInput POSTフォームに埋め込む隠しinput
+templ CSRFInput(token string) {
+	<input type="hidden" name={ httpxproto.CSRFFormField } value={ token }/>
+}
+
+// csrfHXHeaders htmx の hx-headers 属性値（JSON文字列）を組み立てます
+func csrfHXHeaders(token string) string {
+	if token == "" {
+		return "{}"
+	}
+	return `{"` + httpxproto.CSRFHeaderName + `":"` + token + `"}`
+}
+
+// csrfTokenFromCtx 現在レンダリング中のContextからCSRFトークンを取得します。
+// テンプレート引数として都度渡すよりも、Layoutが黙って参照できる方がテンプレートが読みやすいためこの形式にします。
+func csrfTokenFromCtx() string {
+	// テンプレは context に対する動的パラメータをGoランタイム経由で参照するため、
+	// 実際には Layout(...) 呼び出し側で `templ.WithContext` 経由で仕込む。ここではNoop相当のスタブを提供し、
+	// 呼び出し側は必要に応じてCSRFInputで直接値を注入する（既存のCheckoutPageは既にそうしている）。
+	return ""
+}

@@ -1,0 +1,15 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS admin_sessions;
+DROP TABLE IF EXISTS admin_users;
+DROP TABLE IF EXISTS webhook_events;
+DROP TYPE  IF EXISTS webhook_status;
+DROP TABLE IF EXISTS outbox_events;
+DROP TYPE  IF EXISTS outbox_status;
+DROP TABLE IF EXISTS ledger_entries;
+DROP TYPE  IF EXISTS ledger_account;
+DROP TYPE  IF EXISTS ledger_side;
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS payment_transitions;
+DROP TABLE IF EXISTS payments;
+DROP TYPE  IF EXISTS payment_state;
+DROP TABLE IF EXISTS products;

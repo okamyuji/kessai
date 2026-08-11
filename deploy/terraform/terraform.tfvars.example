@@ -1,0 +1,6 @@
+enable_budget_mode     = true
+stripe_secret_key      = "sk_test_replace_me"
+stripe_publishable_key = "pk_test_replace_me"
+stripe_webhook_secret  = "whsec_replace_me"
+admin_email            = "admin@example.com"
+session_signing_key    = "generate-32bytes-random-string-here!!"
