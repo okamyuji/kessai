@@ -177,19 +177,19 @@ func (q *Queries) ListPaymentTransitions(ctx context.Context, paymentID string) 
 const listPayments = `-- name: ListPayments :many
 SELECT id, product_id, amount_jpy, refunded_jpy, state, stripe_payment_intent_id, created_at, updated_at
 FROM payments
-WHERE ($1::payment_state IS NULL OR state = $1::payment_state)
+WHERE ($3::payment_state IS NULL OR state = $3::payment_state)
 ORDER BY created_at DESC
-LIMIT $2 OFFSET $3
+LIMIT $1 OFFSET $2
 `
 
 type ListPaymentsParams struct {
-	Column1 PaymentState
-	Limit   int32
-	Offset  int32
+	Limit  int32
+	Offset int32
+	State  *PaymentState
 }
 
 func (q *Queries) ListPayments(ctx context.Context, arg ListPaymentsParams) ([]Payment, error) {
-	rows, err := q.db.Query(ctx, listPayments, arg.Column1, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listPayments, arg.Limit, arg.Offset, arg.State)
 	if err != nil {
 		return nil, err
 	}

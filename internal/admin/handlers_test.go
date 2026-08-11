@@ -445,6 +445,48 @@ func TestLogin_FullFlow(t *testing.T) {
 	}
 }
 
+// TestDashboard_ListsPayments 決済一覧が200で表示され決済IDが含まれることを検証する
+func TestDashboard_ListsPayments(t *testing.T) {
+	pool := requirePG(t)
+	ctx := context.Background()
+	paymentID, deps, _, _ := setupCapturedPayment(t, ctx, pool)
+
+	r := httptest.NewRequest("GET", "/admin/", nil)
+	rr := recordAndCall(deps.Dashboard, r)
+	if rr.Code != 200 {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), paymentID) {
+		t.Fatalf("一覧に決済IDが無い")
+	}
+}
+
+// TestEnsureInitialAdmin_CreatesOnceAndIdempotent 初期管理者が1回だけ作成され再実行しても重複しないことを検証する
+func TestEnsureInitialAdmin_CreatesOnceAndIdempotent(t *testing.T) {
+	pool := requirePG(t)
+	ctx := context.Background()
+	q := sqlc.New(pool)
+	if err := admin.EnsureInitialAdmin(ctx, q, idgen.NewDefault(), "boot@example.com", "Boot-secret1"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u, err := q.GetAdminUserByEmail(ctx, "boot@example.com")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	ok, err := admin.VerifyPassword("Boot-secret1", u.PasswordHash)
+	if err != nil || !ok {
+		t.Fatalf("パスワード検証失敗: ok=%v err=%v", ok, err)
+	}
+	// 再実行しても重複作成もエラーもない
+	if err := admin.EnsureInitialAdmin(ctx, q, idgen.NewDefault(), "boot@example.com", "Boot-secret1"); err != nil {
+		t.Fatalf("2回目: %v", err)
+	}
+	// 未設定なら何もしない
+	if err := admin.EnsureInitialAdmin(ctx, q, idgen.NewDefault(), "", ""); err != nil {
+		t.Fatalf("未設定: %v", err)
+	}
+}
+
 // TestLogin_RateLimit_429Problem レート制限超過時にHTTP 429とProblem本文のstatusが一致することを検証する
 func TestLogin_RateLimit_429Problem(t *testing.T) {
 	pool := requirePG(t)

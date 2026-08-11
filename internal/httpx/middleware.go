@@ -56,13 +56,10 @@ const (
 	CSRFFormField  = httpxproto.CSRFFormField
 )
 
-// csrfContextKey コンテキストへ格納するキー型
-type csrfContextKey struct{}
-
-// CSRFTokenFromContext ハンドラ・テンプレから現在のCSRFトークンを取得します
+// CSRFTokenFromContext ハンドラ・テンプレから現在のCSRFトークンを取得します。
+// 格納はhttpxprotoの共有キーで行うため、adminなど別パッケージからも同じトークンを読めます
 func CSRFTokenFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(csrfContextKey{}).(string)
-	return v
+	return httpxproto.CSRFTokenFromContext(ctx)
 }
 
 // NewCSRF 署名付きCSRFトークンを発行・検証するミドルウェアを返します。
@@ -85,7 +82,7 @@ func NewCSRF(signingKey []byte, secureCookie bool, logger *slog.Logger) func(htt
 					return
 				}
 			}
-			ctx := context.WithValue(r.Context(), csrfContextKey{}, token)
+			ctx := httpxproto.WithCSRFToken(r.Context(), token)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -38,6 +38,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Goth
 .border-slate-200 { border-color: #e2e8f0; }
 .underline { text-decoration: underline; }
 .space-y-3 > * + * { margin-top: .75rem; }
+.space-y-4 > * + * { margin-top: 1rem; }
+.max-w-sm { max-width: 24rem; }
+.py-10 { padding-top: 2.5rem; padding-bottom: 2.5rem; }
+.py-16 { padding-top: 4rem; padding-bottom: 4rem; }
+.px-3 { padding-left: .75rem; padding-right: .75rem; }
+.mt-1 { margin-top: .25rem; }
+.min-h-screen { min-height: 100vh; }
+.bg-slate-100 { background: #f1f5f9; }
+.text-slate-700 { color: #334155; }
+.text-right { text-align: right; }
+.text-left { text-align: left; }
+.font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.overflow-x-auto { overflow-x: auto; }
+.border { border: 1px solid #e2e8f0; }
+.border-slate-100 { border-color: #f1f5f9; }
+.border-slate-300 { border-color: #cbd5e1; }
+.block { display: block; }
 .grid { display: grid; }
 .grid-cols-1 { grid-template-columns: 1fr; }
 .gap-y-2 { row-gap: .5rem; }

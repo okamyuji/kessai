@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/okamyuji/kessai/internal/admin"
 	"github.com/okamyuji/kessai/internal/httpx"
 	"github.com/okamyuji/kessai/internal/httpx/httpxproto"
 	"github.com/okamyuji/kessai/internal/payment"
@@ -210,6 +211,107 @@ func TestPostCheckout_WithCSRF_303ToConfirm(t *testing.T) {
 	}
 	if stripe.callCount != 1 {
 		t.Fatalf("Stripe呼び出し数=%d want 1", stripe.callCount)
+	}
+}
+
+// TestGetConfirm_UnknownID_400 存在しない決済IDの/pay/は500でなく400のProblem Detailsになることを検証する
+func TestGetConfirm_UnknownID_400(t *testing.T) {
+	pool := requirePG(t)
+	seedProduct(t, context.Background(), pool)
+	srv, _ := newServer(t, pool)
+	c := newClient(t)
+	resp, err := c.Get(srv.URL + "/pay/NONEXISTENT-PAYMENT-ID-0000")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s want 400", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "/problems/validation") {
+		t.Fatalf("Problem Detailsでない: %s", body)
+	}
+}
+
+// TestGetConfirm_ExpiredIdempotencyKey_400 冪等性キー行が削除済みの決済の/pay/は400になることを検証する
+func TestGetConfirm_ExpiredIdempotencyKey_400(t *testing.T) {
+	pool := requirePG(t)
+	ctx := context.Background()
+	productID := seedProduct(t, ctx, pool)
+	srv, _ := newServer(t, pool)
+	// 冪等性キー行を持たない決済を直接シード（キー期限切れ削除後の状態を再現）
+	payID := idgen.NewDefault().New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO payments (id, product_id, amount_jpy, state, stripe_payment_intent_id) VALUES ($1,$2,$3,'created'::payment_state,$4)`,
+		payID, productID, int64(1000), "pi_orphan"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	resp, err := newClient(t).Get(srv.URL + "/pay/" + payID)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+}
+
+// TestAdminLogin_FirstVisit_Succeeds Cookie無しの初回訪問でもログインフォームのCSRFトークンが有効で、
+// そのままログインできることを検証する（管理画面へ直行した訪問者のフロー）
+func TestAdminLogin_FirstVisit_Succeeds(t *testing.T) {
+	pool := requirePG(t)
+	ctx := context.Background()
+	q := sqlc.New(pool)
+	if err := admin.EnsureInitialAdmin(ctx, q, idgen.NewDefault(), "first@example.com", "First-secret1"); err != nil {
+		t.Fatalf("ensure admin: %v", err)
+	}
+	adminDeps := &admin.Deps{
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Queries: q, Sessions: admin.NewPGSessionStore(q, idgen.NewDefault()),
+		IDs:          idgen.NewDefault(),
+		LoginLimiter: admin.NewRateLimiter(time.Minute, 5),
+		IPLimiter:    admin.NewRateLimiter(time.Minute, 20),
+		SessionTTL:   time.Hour,
+	}
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("GET /login", adminDeps.LoginForm)
+	adminMux.HandleFunc("POST /login", adminDeps.Login)
+
+	store := payment.NewPGStore(pool, q)
+	uc := payment.NewUseCase(store, &stubStripe{}, idgen.NewDefault(), "manual", time.Hour)
+	deps := httpx.CheckoutDeps{
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Queries: q, UseCase: uc, IDGen: idgen.NewDefault(),
+		PubKey: "pk_test_dummy", AdminMux: adminMux,
+	}
+	key := []byte("test-key-that-is-32-bytes-long!!01")
+	srv := httptest.NewServer(httpx.NewMux(deps, key, false, "../../web/static"))
+	t.Cleanup(srv.Close)
+
+	c := newClient(t)
+	// 初回GET（このリクエストにはCSRF Cookieが載っていない）
+	resp, err := c.Get(srv.URL + "/admin/login")
+	if err != nil {
+		t.Fatalf("GET login: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	token := extractCSRFToken(string(body))
+	if token == "" {
+		t.Fatalf("初回訪問のログインフォームにCSRFトークンが埋まっていない")
+	}
+	form := url.Values{"email": {"first@example.com"}, "password": {"First-secret1"}, httpxproto.CSRFFormField: {token}}
+	req, _ := http.NewRequest("POST", srv.URL+"/admin/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("POST login: %v", err)
+	}
+	defer func() { _ = post.Body.Close() }()
+	if post.StatusCode != http.StatusSeeOther {
+		b, _ := io.ReadAll(post.Body)
+		t.Fatalf("login status=%d body=%s", post.StatusCode, b)
 	}
 }
 

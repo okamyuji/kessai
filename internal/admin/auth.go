@@ -22,6 +22,29 @@ import (
 	"github.com/okamyuji/kessai/internal/platform/sqlc"
 )
 
+// EnsureInitialAdmin 初期管理者を作成します（FR-D3）。emailとpasswordの両方が設定され、
+// 該当メールのadmin_users行が存在しない場合にのみ作成します。既存なら何もしません。
+func EnsureInitialAdmin(ctx context.Context, q *sqlc.Queries, ids idgen.Generator, email, password string) error {
+	if email == "" || password == "" {
+		return nil
+	}
+	if _, err := q.GetAdminUserByEmail(ctx, email); err == nil {
+		return nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("admin: GetAdminUserByEmail: %w", err)
+	}
+	hash, err := HashPassword(password, DefaultArgon2Params())
+	if err != nil {
+		return fmt.Errorf("admin: HashPassword: %w", err)
+	}
+	if _, err := q.CreateAdminUser(ctx, sqlc.CreateAdminUserParams{
+		ID: ids.New(), Email: email, PasswordHash: hash,
+	}); err != nil {
+		return fmt.Errorf("admin: CreateAdminUser: %w", err)
+	}
+	return nil
+}
+
 // Argon2Params OWASP推奨の既定値。CPU/メモリ負荷は運用環境に合わせて調整可能。
 type Argon2Params struct {
 	Time    uint32 // 反復回数

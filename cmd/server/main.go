@@ -82,6 +82,11 @@ func main() {
 	// Webhook受信
 	webhookRecv := webhook.New(lg, pool, q, idgen.NewDefault(), cfg.StripeWebhookSecret)
 
+	// 初期管理者の作成（FR-D3）。ADMIN_EMAILとADMIN_INITIAL_PASSWORDが揃っていて未作成のときのみ作成
+	if err := admin.EnsureInitialAdmin(context.Background(), q, idgen.NewDefault(), cfg.AdminEmail, cfg.AdminInitialPassword); err != nil {
+		lg.Error("初期管理者の作成に失敗", "err", err)
+	}
+
 	// Admin ハンドラ
 	adminDeps := &admin.Deps{
 		Logger: lg, Queries: q, Sessions: admin.NewPGSessionStore(q, idgen.NewDefault()),

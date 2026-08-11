@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/okamyuji/kessai/internal/payment"
 	"github.com/okamyuji/kessai/internal/payment/stripeclient"
 	"github.com/okamyuji/kessai/internal/platform/idgen"
@@ -188,6 +190,9 @@ func loadPaymentForConfirm(ctx context.Context, deps CheckoutDeps, paymentID str
 	}
 	pay, err := deps.Queries.GetPayment(ctx, paymentID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", templates.ProductView{}, errPaymentNotFound
+		}
 		return "", templates.ProductView{}, fmt.Errorf("get payment: %w", err)
 	}
 	prod, err := deps.Queries.GetProduct(ctx, pay.ProductID)
@@ -201,6 +206,10 @@ func loadPaymentForConfirm(ctx context.Context, deps CheckoutDeps, paymentID str
 	view := templates.ProductView{ID: prod.ID, Name: prod.Name, Price: amount}
 	idem, err := deps.Queries.GetIdempotencyByPaymentID(ctx, &paymentID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// 冪等性キーの期限切れ削除後は決済ページを再表示できない
+			return "", view, errPaymentNotFound
+		}
 		return "", view, fmt.Errorf("get idempotency response: %w", err)
 	}
 	if idem.ResponseSnapshot == nil {
@@ -232,8 +241,13 @@ func TranslatePaymentErrorForTest(w http.ResponseWriter, logger *slog.Logger, er
 }
 
 // classifyPaymentError paymentのsentinel error群をRFC 9457のProblemへ写します
+// errPaymentNotFound 決済IDに対応する表示可能な決済が無い
+var errPaymentNotFound = errors.New("決済が見つからない")
+
 func classifyPaymentError(err error) *problem.Problem {
 	switch {
+	case errors.Is(err, errPaymentNotFound):
+		return problem.Validation(err.Error())
 	case errors.Is(err, payment.ErrIdempotencyConflict):
 		return problem.IdempotencyConflict(err.Error())
 	case errors.Is(err, payment.ErrIdempotencyInProgress):

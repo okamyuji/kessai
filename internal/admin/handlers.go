@@ -27,24 +27,47 @@ import (
 const SessionCookieName = "kessai_admin_sid"
 
 // htmlLoginTmpl はログインフォーム。動的値は {{.CSRFToken}} を通し、html/templateが自動エスケープ
-var htmlLoginTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html><html lang="ja"><body>
-<h1>管理者ログイン</h1>
-<form method="POST" action="/admin/login">
+var htmlLoginTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html><html lang="ja"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>kessai 管理者ログイン</title>
+<link rel="stylesheet" href="/static/tailwind.css"/>
+</head><body class="bg-slate-100 min-h-screen">
+<main class="mx-auto max-w-sm px-4 py-16">
+<section class="rounded-lg bg-white p-6 shadow">
+<h1 class="text-xl font-bold mb-6">管理者ログイン</h1>
+<form method="POST" action="/admin/login" class="space-y-4">
 <input type="hidden" name="{{.CSRFField}}" value="{{.CSRFToken}}"/>
-<label>メール<input name="email" type="email" required></label>
-<label>パスワード<input name="password" type="password" required></label>
-<button type="submit">ログイン</button>
-</form></body></html>`))
+<label class="block text-sm text-slate-700">メール
+<input name="email" type="email" required class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
+<label class="block text-sm text-slate-700">パスワード
+<input name="password" type="password" required class="mt-1 w-full rounded border border-slate-300 px-3 py-2"></label>
+<button type="submit" class="w-full px-4 py-2 rounded bg-emerald-600 text-white font-bold">ログイン</button>
+</form>
+</section>
+</main></body></html>`))
 
 // htmlDashboardTmpl 決済一覧
-var htmlDashboardTmpl = template.Must(template.New("dash").Parse(`<!DOCTYPE html><html lang="ja"><body>
-<h1>決済一覧</h1>
-<table>
-<tr><th>ID</th><th>状態</th><th>金額</th><th>返金累計</th></tr>
+var htmlDashboardTmpl = template.Must(template.New("dash").Parse(`<!DOCTYPE html><html lang="ja"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>kessai 管理ダッシュボード</title>
+<link rel="stylesheet" href="/static/tailwind.css"/>
+</head><body class="bg-slate-100 min-h-screen">
+<main class="mx-auto max-w-3xl px-4 py-10">
+<h1 class="text-xl font-bold mb-6">決済一覧</h1>
+<section class="rounded-lg bg-white shadow overflow-x-auto">
+<table class="w-full text-sm">
+<tr class="border-b border-slate-200 text-left text-slate-500">
+<th class="px-4 py-3">ID</th><th class="px-4 py-3">状態</th><th class="px-4 py-3 text-right">金額</th><th class="px-4 py-3 text-right">返金累計</th></tr>
 {{range .Payments}}
-<tr><td>{{.ID}}</td><td>{{.State}}</td><td>{{.AmountJpy}}</td><td>{{.RefundedJpy}}</td></tr>
+<tr class="border-b border-slate-100">
+<td class="px-4 py-2 font-mono text-xs">{{.ID}}</td>
+<td class="px-4 py-2">{{.State}}</td>
+<td class="px-4 py-2 text-right">{{.AmountJpy}}円</td>
+<td class="px-4 py-2 text-right">{{.RefundedJpy}}円</td></tr>
 {{end}}
-</table></body></html>`))
+</table>
+</section>
+</main></body></html>`))
 
 // Deps 管理画面ハンドラの依存
 type Deps struct {
@@ -95,8 +118,13 @@ func (d *Deps) RequireAuth(next http.Handler) http.Handler {
 // XSS対策のため html/template ですべての動的値をエスケープします。
 func (d *Deps) LoginForm(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// httpxミドルウェアが埋めるContext上のCSRFトークン。無ければCookieから直接読む。
-	token, _ := r.Context().Value(csrfTokenContextKey{}).(string)
+	// httpxミドルウェアがhttpxprotoの共有キーで埋めるContext上のCSRFトークンを読む。
+	// 初回アクセスはCookieがまだリクエストに無いため、Context経由が唯一の受け渡し経路になる。
+	token := httpxproto.CSRFTokenFromContext(r.Context())
+	if token == "" {
+		// テストがadmin独自キーで注入する場合と、ミドルウェア外で呼ばれた場合のフォールバック
+		token, _ = r.Context().Value(csrfTokenContextKey{}).(string)
+	}
 	if token == "" {
 		if c, err := r.Cookie(httpxproto.CSRFCookieName); err == nil {
 			token = c.Value

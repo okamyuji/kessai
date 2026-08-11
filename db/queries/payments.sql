@@ -17,9 +17,9 @@ FOR UPDATE;
 -- name: ListPayments :many
 SELECT id, product_id, amount_jpy, refunded_jpy, state, stripe_payment_intent_id, created_at, updated_at
 FROM payments
-WHERE ($1::payment_state IS NULL OR state = $1::payment_state)
+WHERE (sqlc.narg('state')::payment_state IS NULL OR state = sqlc.narg('state')::payment_state)
 ORDER BY created_at DESC
-LIMIT $2 OFFSET $3;
+LIMIT $1 OFFSET $2;
 
 -- name: UpdatePaymentState :one
 UPDATE payments

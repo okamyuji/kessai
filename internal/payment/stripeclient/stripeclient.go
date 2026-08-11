@@ -135,6 +135,18 @@ func (c *realClient) CapturePaymentIntent(ctx context.Context, req CaptureReques
 	return intentFromStripe(pi), nil
 }
 
+// stripeRefundReason Stripeのreasonはenum（duplicate/fraudulent/requested_by_customer）限定のため、
+// 有効値のみ渡し、それ以外の自由記述はnil（フィールド省略）にする。自由記述の理由はaudit_logs側に残る。
+func stripeRefundReason(reason string) *string {
+	switch reason {
+	case string(stripe.RefundReasonDuplicate),
+		string(stripe.RefundReasonFraudulent),
+		string(stripe.RefundReasonRequestedByCustomer):
+		return stripe.String(reason)
+	}
+	return nil
+}
+
 func (c *realClient) Refund(ctx context.Context, req RefundRequest) (*Refund, error) {
 	permit, err := c.br.Allow()
 	if err != nil {
@@ -149,9 +161,7 @@ func (c *realClient) Refund(ctx context.Context, req RefundRequest) (*Refund, er
 	params := &stripe.RefundCreateParams{
 		PaymentIntent: stripe.String(req.PaymentIntentID),
 		Amount:        &amount,
-	}
-	if req.Reason != "" {
-		params.Reason = stripe.String(req.Reason)
+		Reason:        stripeRefundReason(req.Reason),
 	}
 	params.SetIdempotencyKey(derived)
 	rf, err := c.api.V1Refunds.Create(ctx, params)
