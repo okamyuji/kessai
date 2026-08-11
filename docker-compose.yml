@@ -6,7 +6,7 @@ services:
     ports:
       - "12111:12111"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:12111/v1/customers || exit 1"]
+      test: ["CMD-SHELL", "wget -q --header='Authorization: Bearer sk_test_dummy' --spider http://127.0.0.1:12111/v1/customers || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10

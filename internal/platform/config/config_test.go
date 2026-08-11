@@ -26,6 +26,7 @@ var fullEnv = map[string]string{
 
 func TestLoad_HappyPath(t *testing.T) {
 	setEnv(t, fullEnv)
+	t.Setenv("STRIPE_MOCK_URL", "http://127.0.0.1:12111")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("err=%v", err)
@@ -38,6 +39,9 @@ func TestLoad_HappyPath(t *testing.T) {
 	}
 	if cfg.AuthExpiryDays != 21 {
 		t.Fatalf("既定AuthExpiryDays=21: got %d", cfg.AuthExpiryDays)
+	}
+	if cfg.StripeMockURL != "http://127.0.0.1:12111" {
+		t.Fatalf("STRIPE_MOCK_URLを保持する: got %q", cfg.StripeMockURL)
 	}
 }
 

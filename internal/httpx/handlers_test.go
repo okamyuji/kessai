@@ -193,7 +193,7 @@ func TestPostCheckout_WithCSRF_303ToConfirm(t *testing.T) {
 	if token == "" {
 		t.Fatalf("CSRF tokenが取得できない")
 	}
-	form := url.Values{"product_id": {productID}, httpxproto.CSRFFormField: {token}}
+	form := url.Values{"product_id": {productID}, "idempotency_key": {extractIdempotencyKey(string(body))}, httpxproto.CSRFFormField: {token}}
 	req, _ := http.NewRequest("POST", srv.URL+"/checkout", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.Do(req)
@@ -213,6 +213,101 @@ func TestPostCheckout_WithCSRF_303ToConfirm(t *testing.T) {
 	}
 }
 
+// extractIdempotencyKey CheckoutPageのhidden inputから冪等性キーを取り出す
+func extractIdempotencyKey(html string) string {
+	needle := "name=\"idempotency_key\" value=\""
+	i := strings.Index(html, needle)
+	if i < 0 {
+		return ""
+	}
+	j := i + len(needle)
+	k := strings.Index(html[j:], "\"")
+	if k < 0 {
+		return ""
+	}
+	return html[j : j+k]
+}
+
+// TestPostCheckout_DoubleSubmit_OnePayment 同じフォームを2回送信しても決済が1件しか作られないことを検証する
+func TestPostCheckout_DoubleSubmit_OnePayment(t *testing.T) {
+	pool := requirePG(t)
+	productID := seedProduct(t, context.Background(), pool)
+	srv, stripe := newServer(t, pool)
+	c := newClient(t)
+	getResp, err := c.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	body, _ := io.ReadAll(getResp.Body)
+	token := extractCSRFToken(string(body))
+	idemKey := extractIdempotencyKey(string(body))
+	if idemKey == "" {
+		t.Fatalf("フォームに冪等性キーのhidden inputが無い")
+	}
+	form := url.Values{
+		"product_id":             {productID},
+		"idempotency_key":        {idemKey},
+		httpxproto.CSRFFormField: {token},
+	}
+	post := func() *http.Response {
+		req, _ := http.NewRequest("POST", srv.URL+"/checkout", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		return resp
+	}
+	resp1 := post()
+	defer func() { _ = resp1.Body.Close() }()
+	loc1 := resp1.Header.Get("Location")
+	resp2 := post()
+	defer func() { _ = resp2.Body.Close() }()
+	loc2 := resp2.Header.Get("Location")
+	if resp1.StatusCode != http.StatusSeeOther || resp2.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status=%d,%d want 303,303", resp1.StatusCode, resp2.StatusCode)
+	}
+	if loc1 == "" || loc1 != loc2 {
+		t.Fatalf("Location不一致: %q vs %q", loc1, loc2)
+	}
+	if stripe.callCount != 1 {
+		t.Fatalf("Stripe呼び出し数=%d want 1", stripe.callCount)
+	}
+}
+
+// TestPostCheckout_InvalidIdempotencyKey_400 ULID形式でない冪等性キーは400になることを検証する
+func TestPostCheckout_InvalidIdempotencyKey_400(t *testing.T) {
+	pool := requirePG(t)
+	productID := seedProduct(t, context.Background(), pool)
+	srv, _ := newServer(t, pool)
+	c := newClient(t)
+	getResp, err := c.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	body, _ := io.ReadAll(getResp.Body)
+	token := extractCSRFToken(string(body))
+	for _, bad := range []string{"", "short", "lowercase-not-ulid-26chars", strings.Repeat("!", 26)} {
+		form := url.Values{
+			"product_id":             {productID},
+			"idempotency_key":        {bad},
+			httpxproto.CSRFFormField: {token},
+		}
+		req, _ := http.NewRequest("POST", srv.URL+"/checkout", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("key=%q status=%d want 400", bad, resp.StatusCode)
+		}
+	}
+}
+
 // POST /checkout の303を追跡して /pay/{id} を取得し、confirmページのHTMLが返ることを確認
 func TestGetConfirm_ShowsPaymentIntentAndCSP(t *testing.T) {
 	pool := requirePG(t)
@@ -227,7 +322,7 @@ func TestGetConfirm_ShowsPaymentIntentAndCSP(t *testing.T) {
 	defer func() { _ = getResp.Body.Close() }()
 	body, _ := io.ReadAll(getResp.Body)
 	token := extractCSRFToken(string(body))
-	form := url.Values{"product_id": {productID}, httpxproto.CSRFFormField: {token}}
+	form := url.Values{"product_id": {productID}, "idempotency_key": {extractIdempotencyKey(string(body))}, httpxproto.CSRFFormField: {token}}
 	req, _ := http.NewRequest("POST", srv.URL+"/checkout", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	postResp, err := c.Do(req)
@@ -249,6 +344,9 @@ func TestGetConfirm_ShowsPaymentIntentAndCSP(t *testing.T) {
 	s := string(confBody)
 	if !strings.Contains(s, "id=\"payment-element\"") {
 		t.Fatalf("confirm ページに payment-element が無い: %q", s[:min(400, len(s))])
+	}
+	if !strings.Contains(s, "data-client-secret=\"cs_") {
+		t.Fatalf("confirm ページにStripeのclient_secretが無い: %q", s[:min(1000, len(s))])
 	}
 	if confResp.Header.Get("Content-Security-Policy") == "" {
 		t.Fatalf("confirm ページに CSPが無い")

@@ -39,7 +39,8 @@ type Relay struct {
 	Backoff func(retryCount int) time.Duration
 }
 
-// DefaultBackoff 03-basic-designの規定: 2^(retry_count-1)分 (1,2,4,8,16,32)
+// DefaultBackoff 03-basic-designの規定: 2^(retry_count-1)分 (1,2,4,8,16)。
+// MaxRetries=6では6回目の失敗が即failedになるため32分には到達しない
 func DefaultBackoff(retryCount int) time.Duration {
 	if retryCount < 1 {
 		retryCount = 1

@@ -21,6 +21,7 @@ type Querier interface {
 	GetAdminSession(ctx context.Context, id string) (AdminSession, error)
 	GetAdminUserByEmail(ctx context.Context, email string) (AdminUser, error)
 	GetIdempotency(ctx context.Context, key string) (IdempotencyKey, error)
+	GetIdempotencyByPaymentID(ctx context.Context, paymentID *string) (IdempotencyKey, error)
 	GetPayment(ctx context.Context, id string) (Payment, error)
 	GetPaymentForUpdate(ctx context.Context, id string) (Payment, error)
 	GetProduct(ctx context.Context, id string) (Product, error)

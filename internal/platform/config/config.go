@@ -18,6 +18,7 @@ type Config struct {
 	StripeSecretKey       string
 	StripePublishableKey  string
 	StripeWebhookSecret   string
+	StripeMockURL         string
 	CaptureMode           string // "manual" or "auto"
 	CheckoutExpiryMinutes int
 	AuthExpiryDays        int
@@ -60,6 +61,7 @@ func Load() (Config, error) {
 		StripeSecretKey:       get("STRIPE_SECRET_KEY", true),
 		StripePublishableKey:  get("STRIPE_PUBLISHABLE_KEY", true),
 		StripeWebhookSecret:   get("STRIPE_WEBHOOK_SECRET", true),
+		StripeMockURL:         get("STRIPE_MOCK_URL", false),
 		CaptureMode:           firstNonEmpty(get("CAPTURE_MODE", false), "manual"),
 		CheckoutExpiryMinutes: getInt("CHECKOUT_EXPIRY_MINUTES", 60),
 		AuthExpiryDays:        getInt("AUTH_EXPIRY_DAYS", 21),

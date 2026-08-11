@@ -20,6 +20,7 @@ const (
 	TypeRefundExceedsAmount   TypeURI = "/problems/refund-exceeds-amount"
 	TypePSPUnavailable        TypeURI = "/problems/psp-unavailable"
 	TypeValidation            TypeURI = "/problems/validation"
+	TypeRateLimited           TypeURI = "/problems/rate-limited"
 	TypeUnauthorized          TypeURI = "/problems/unauthorized"
 	TypeInternal              TypeURI = "/problems/internal"
 )
@@ -89,6 +90,11 @@ func PSPUnavailable(detail string) *Problem {
 // Validation 入力検証エラー
 func Validation(detail string) *Problem {
 	return New(TypeValidation, "入力検証エラー", http.StatusBadRequest, detail).WithRetryable(false)
+}
+
+// RateLimited レート制限超過。時間を置けば再試行できるためretryable
+func RateLimited(detail string) *Problem {
+	return New(TypeRateLimited, "試行回数が多すぎる", http.StatusTooManyRequests, detail).WithRetryable(true)
 }
 
 // Unauthorized 未認証

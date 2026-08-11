@@ -24,7 +24,7 @@ type ProductView struct {
 }
 
 // CheckoutPage 購入導線の起点。特商法6項目を最終確認画面と同じ順で常時表示する（FR-D2）。
-templ CheckoutPage(publishableKey string, product ProductView, tokusho TokushoSnapshot, csrfToken string) {
+templ CheckoutPage(publishableKey string, product ProductView, tokusho TokushoSnapshot, csrfToken string, idempotencyKey string) {
 	@Layout("購入", publishableKey) {
 		<section class="rounded-lg bg-white p-6 shadow">
 			<h1 class="text-xl font-bold mb-4">{ product.Name }</h1>
@@ -35,6 +35,8 @@ templ CheckoutPage(publishableKey string, product ProductView, tokusho TokushoSn
 			<form method="POST" action="/checkout" hx-boost="false" class="space-y-3">
 				@CSRFInput(csrfToken)
 				<input type="hidden" name="product_id" value={ product.ID }/>
+				// 冪等性キーはページ描画時にサーバが発行し、二重送信を同一キーの再送に畳み込む
+				<input type="hidden" name="idempotency_key" value={ idempotencyKey }/>
 				<button type="submit" class="px-4 py-2 rounded bg-emerald-600 text-white font-bold w-full">
 					カード情報の入力へ進む
 				</button>
@@ -45,7 +47,7 @@ templ CheckoutPage(publishableKey string, product ProductView, tokusho TokushoSn
 }
 
 // ConfirmPage 3DS認証を含む決済の完了ページ。Stripe.js（confirmPayment）をブラウザ側で呼びます。
-templ ConfirmPage(publishableKey, clientSecret, paymentID string, product ProductView, tokusho TokushoSnapshot) {
+templ ConfirmPage(publishableKey, clientSecret, paymentID string, product ProductView, tokusho TokushoSnapshot, stripeMock bool) {
 	@Layout("お支払い", publishableKey) {
 		<section class="rounded-lg bg-white p-6 shadow">
 			<h1 class="text-xl font-bold mb-4">お支払い</h1>
@@ -54,14 +56,21 @@ templ ConfirmPage(publishableKey, clientSecret, paymentID string, product Produc
 				<div class="font-bold text-lg">{ product.Price.String() }</div>
 				<div class="text-xs">決済ID: <code>{ paymentID }</code></div>
 			</div>
-			// Stripe Elements を差し込むための空要素
-			<div id="payment-element" class="mb-4"></div>
-			<button id="pay-btn" class="px-4 py-2 rounded bg-emerald-600 text-white font-bold w-full">
-				カード情報を入力して確定する
-			</button>
-			<div id="pay-error" class="mt-3 text-sm text-rose-600"></div>
-			// Stripe.js初期化はテンプレ末尾のscriptで（CSPでself+jsdotstripedotcomのみ許可）
-			<script src="/static/stripe-init.js" defer data-client-secret={ clientSecret }></script>
+			if stripeMock {
+				<div class="rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+					<p class="font-bold">Stripeモック接続でPaymentIntentを作成しました。</p>
+					<p class="mt-2">stripe-mockはサーバ側API応答の確認用です。カード入力、3DS認証、決済確定はStripeテストキーで確認してください。</p>
+				</div>
+			} else {
+				// Stripe Elements を差し込むための空要素
+				<div id="payment-element" class="mb-4"></div>
+				<button id="pay-btn" class="px-4 py-2 rounded bg-emerald-600 text-white font-bold w-full">
+					カード情報を入力して確定する
+				</button>
+				<div id="pay-error" class="mt-3 text-sm text-rose-600"></div>
+				// Stripe.js初期化はテンプレ末尾のscriptで（CSPでself+jsdotstripedotcomのみ許可）
+				<script src="/static/stripe-init.js" defer data-client-secret={ clientSecret }></script>
+			}
 		</section>
 		@TokushoBlock(tokusho)
 	}

@@ -61,22 +61,60 @@ PostgreSQL 18（Docker Compose）
 
 ## 動かす
 
-### ローカル起動
+### Stripeキーなしで8081の購入画面まで確認する
+
+DockerとGoを利用できる状態で、PostgreSQLとstripe-mockを起動します。stripe-mockを使うため、StripeアカウントやStripeテストキーは不要です。
 
 ```bash
-# 1. DB起動
+# 1. PostgreSQLとstripe-mockを起動
 make up
 
-# 2. マイグレーション適用（サーバ起動時にも自動適用されます）
-make migrate
-
-# 3. アプリ起動（開発時はKESSAI_INSECURE_COOKIE=1を推奨）
-cp .env.example .env    # StripeキーなどをテストキーへPCで書換
-go run ./cmd/server
-
-# 4. ブラウザで確認
-open http://127.0.0.1:8080/
+# 2. dbとstripe-mockがhealthyになったことを確認
+docker compose ps
 ```
+
+`.env`がまだない場合だけ`.env.example`をコピーし、8080が使用中なら`HTTP_ADDR`を8081へ変更します。`.env.example`にはstripe-mock用のダミーキーと`STRIPE_MOCK_URL=http://127.0.0.1:12111`が設定済みです。
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+HTTP_ADDR=127.0.0.1:8081
+```
+
+サーバを起動します。マイグレーションは起動時に自動適用されるため、通常は`make migrate`を別途実行する必要はありません。
+
+```bash
+go run ./cmd/server
+```
+
+次のログが表示されれば、8081でリクエストを受け付けられる状態です。
+
+```text
+"msg":"migrations applied"
+"msg":"listen","addr":"127.0.0.1:8081"
+```
+
+ブラウザで購入画面を開きます。
+
+```bash
+open http://127.0.0.1:8081/
+```
+
+「カード情報の入力へ進む」を押し、次の結果を確認します。
+
+1. URLが`http://127.0.0.1:8081/pay/{決済ID}`へ変わる。
+2. 画面に「Stripeモック接続でPaymentIntentを作成しました」と表示される。
+3. サーバログのPOST `/checkout`が`"status":303`になり、Stripeの401やHTTP 500が出ていない。
+
+確認後はサーバを`Ctrl+C`で停止します。コンテナも停止する場合は`make down`を実行します。
+
+stripe-mockで確認できるのは、サーバ側でPaymentIntentを作成して`/pay/{id}`を表示するまでです。カード入力、3DS認証、決済確定は実行しません。
+
+### Stripeテストキーでカード入力とWebhookを確認する
+
+カード入力、3DS認証、決済確定まで確認する場合は、Stripe Dashboardのテストモードで公開可能キーとシークレットキーを取得し、`.env`の`STRIPE_*`を置き換えて`STRIPE_MOCK_URL`を削除してください。Webhookをローカル受信する場合はStripe CLIの`stripe listen --forward-to http://127.0.0.1:8081/webhooks/stripe`が表示する署名シークレットを`STRIPE_WEBHOOK_SECRET`へ設定します。
 
 ### 全テスト実行
 

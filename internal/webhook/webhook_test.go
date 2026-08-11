@@ -61,7 +61,7 @@ func fixedVerify(evt stripe.Event) func([]byte, string, string) (stripe.Event, e
 func newRecv(t *testing.T, pool *pgxpool.Pool, verify func([]byte, string, string) (stripe.Event, error)) *webhook.Receiver {
 	t.Helper()
 	q := sqlc.New(pool)
-	r := webhook.New(slog.New(slog.NewTextHandler(io.Discard, nil)), q, idgen.NewDefault(), "whsec_dummy")
+	r := webhook.New(slog.New(slog.NewTextHandler(io.Discard, nil)), pool, q, idgen.NewDefault(), "whsec_dummy")
 	if verify != nil {
 		r.Verify = verify
 	}
@@ -110,6 +110,87 @@ func TestWebhook_ValidSignature_Records200(t *testing.T) {
 	}
 	if len(obx) != 1 {
 		t.Fatalf("outbox_events=%d want 1", len(obx))
+	}
+}
+
+// seqIDGen 事前に並べたIDを順に返すスタブ。尽きたら実生成にフォールバックする
+type seqIDGen struct {
+	ids  []string
+	i    int
+	real idgen.Generator
+}
+
+func (g *seqIDGen) New() string {
+	if g.i < len(g.ids) {
+		v := g.ids[g.i]
+		g.i++
+		return v
+	}
+	if g.real == nil {
+		g.real = idgen.NewDefault()
+	}
+	return g.real.New()
+}
+
+// TestWebhook_OutboxInsertFailure_Atomic Outbox登録が失敗したらwebhook_events記録も残らず、再配信で回復できることを検証する
+func TestWebhook_OutboxInsertFailure_Atomic(t *testing.T) {
+	pool := requirePG(t)
+	q := sqlc.New(pool)
+	ctx := context.Background()
+	// 既存のoutbox行とID衝突させて、2番目のINSERT(Outbox登録)だけを失敗させる
+	if _, err := q.EnqueueOutboxEvent(ctx, sqlc.EnqueueOutboxEventParams{
+		ID: "OUTBOX-DUP-ID", EventType: "noop", Payload: []byte(`{}`),
+	}); err != nil {
+		t.Fatalf("seed outbox: %v", err)
+	}
+	evt := stripe.Event{ID: "evt_C", Type: stripe.EventTypePaymentIntentSucceeded}
+	r := newRecv(t, pool, fixedVerify(evt))
+	r.IDGen = &seqIDGen{ids: []string{"WEBHOOK-ROW-ID", "OUTBOX-DUP-ID"}}
+
+	req := httptest.NewRequest("POST", "/webhooks/stripe", bytes.NewReader([]byte(`{"id":"evt_C"}`)))
+	req.Header.Set("Stripe-Signature", "t=1")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 500 {
+		t.Fatalf("status=%d want 500", rec.Code)
+	}
+	rows, err := q.ListWebhookEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, row := range rows {
+		if row.StripeEventID == "evt_C" {
+			t.Fatalf("Outbox登録失敗なのにwebhook_events記録が残っている（原子性違反）")
+		}
+	}
+	// Stripeの再配信（健全なID生成）で両方の行が入る
+	r2 := newRecv(t, pool, fixedVerify(evt))
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("POST", "/webhooks/stripe", bytes.NewReader([]byte(`{"id":"evt_C"}`)))
+	req2.Header.Set("Stripe-Signature", "t=1")
+	r2.ServeHTTP(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("再配信 status=%d want 200", rec2.Code)
+	}
+	rows2, err := q.ListWebhookEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	found := 0
+	for _, row := range rows2 {
+		if row.StripeEventID == "evt_C" {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf("再配信後のwebhook_events(evt_C)=%d want 1", found)
+	}
+	obx, err := q.ListOutboxEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	if len(obx) != 2 { // 事前シード1件 + 再配信での登録1件
+		t.Fatalf("outbox_events=%d want 2", len(obx))
 	}
 }
 

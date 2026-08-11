@@ -43,6 +43,26 @@ func (q *Queries) GetIdempotency(ctx context.Context, key string) (IdempotencyKe
 	return i, err
 }
 
+const getIdempotencyByPaymentID = `-- name: GetIdempotencyByPaymentID :one
+SELECT key, request_hash, response_snapshot, payment_id, expires_at, created_at
+FROM idempotency_keys
+WHERE payment_id = $1
+`
+
+func (q *Queries) GetIdempotencyByPaymentID(ctx context.Context, paymentID *string) (IdempotencyKey, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyByPaymentID, paymentID)
+	var i IdempotencyKey
+	err := row.Scan(
+		&i.Key,
+		&i.RequestHash,
+		&i.ResponseSnapshot,
+		&i.PaymentID,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const setIdempotencyResponse = `-- name: SetIdempotencyResponse :exec
 UPDATE idempotency_keys
 SET response_snapshot = $2, payment_id = COALESCE($3, payment_id)

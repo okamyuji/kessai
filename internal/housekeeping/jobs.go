@@ -18,10 +18,12 @@ type ExpiryPolicy struct {
 	AuthExpiryDays        int // authorized のまま検出する上限
 }
 
-// PGQuerier 内部で使う最小のExec/Query。pgxpool.Poolが満たす。
+// PGQuerier 内部で使う最小のExec/Query。PoolAdapterが満たす。
 type PGQuerier interface {
 	QueryScalarStrings(ctx context.Context, sql string, args ...any) ([]string, error)
 	Exec(ctx context.Context, sql string, args ...any) error
+	// InTx fn内の全操作を1つのDBトランザクションで実行する
+	InTx(ctx context.Context, fn func(q PGQuerier) error) error
 }
 
 // Runner 依存を注入した実行器
@@ -84,23 +86,32 @@ func (r *Runner) expireAuthorized(ctx context.Context) (int, error) {
 // expireBy 指定状態で cutoff より古いpaymentsをexpiredへ遷移し、遷移履歴も1件挿入します。
 // 手順: (1) 対象IDをRETURNINGで取得して状態を expired にUPDATE、(2) 各IDに対して
 // アプリ側でULIDを生成し payment_transitions を1件ずつINSERTする。
+// (1)(2)は同一トランザクションで確定する。片方だけ残ると「expiredなのに履歴がない」決済が生まれるため。
 func (r *Runner) expireBy(ctx context.Context, fromState string, cutoff time.Time) (int, error) {
 	const updateSQL = `
 UPDATE payments
    SET state = 'expired', updated_at = now()
  WHERE state = $1::payment_state AND updated_at < $2
  RETURNING id`
-	ids, err := r.PG.QueryScalarStrings(ctx, updateSQL, fromState, cutoff)
-	if err != nil {
-		return 0, err
-	}
 	const insertSQL = `
 INSERT INTO payment_transitions (id, payment_id, from_state, to_state, event, actor)
 VALUES ($1, $2, $3::payment_state, 'expired'::payment_state, 'Expire', 'housekeeping')`
-	for _, pid := range ids {
-		if err := r.PG.Exec(ctx, insertSQL, r.IDs.New(), pid, fromState); err != nil {
-			return 0, fmt.Errorf("insert transition: %w", err)
+	var count int
+	err := r.PG.InTx(ctx, func(q PGQuerier) error {
+		ids, err := q.QueryScalarStrings(ctx, updateSQL, fromState, cutoff)
+		if err != nil {
+			return err
 		}
+		for _, pid := range ids {
+			if err := q.Exec(ctx, insertSQL, r.IDs.New(), pid, fromState); err != nil {
+				return fmt.Errorf("insert transition: %w", err)
+			}
+		}
+		count = len(ids)
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return len(ids), nil
+	return count, nil
 }

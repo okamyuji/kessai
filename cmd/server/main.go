@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	stripe "github.com/stripe/stripe-go/v86"
 
 	"github.com/okamyuji/kessai/internal/admin"
 	"github.com/okamyuji/kessai/internal/housekeeping"
@@ -62,7 +64,7 @@ func main() {
 	q := sqlc.New(pool)
 	store := payment.NewPGStore(pool, q)
 	br := breaker.New(breaker.DefaultConfig())
-	sc := stripeclient.New(cfg.StripeSecretKey, br)
+	sc := newStripeClient(cfg, br)
 	uc := payment.NewUseCase(store, sc, idgen.NewDefault(), cfg.CaptureMode, time.Hour)
 
 	tokusho := templates.TokushoSnapshot{
@@ -78,7 +80,7 @@ func main() {
 	sseHub := httpx.NewSSEHub(lg, 32)
 
 	// Webhook受信
-	webhookRecv := webhook.New(lg, q, idgen.NewDefault(), cfg.StripeWebhookSecret)
+	webhookRecv := webhook.New(lg, pool, q, idgen.NewDefault(), cfg.StripeWebhookSecret)
 
 	// Admin ハンドラ
 	adminDeps := &admin.Deps{
@@ -94,10 +96,11 @@ func main() {
 	adminMux.HandleFunc("POST /logout", adminDeps.Logout)
 	adminMux.Handle("GET /", adminDeps.RequireAuth(http.HandlerFunc(adminDeps.Dashboard)))
 	adminMux.Handle("POST /payments/{payment_id}/refund", adminDeps.RequireAuth(http.HandlerFunc(adminDeps.Refund)))
+	adminMux.Handle("POST /payments/{payment_id}/capture", adminDeps.RequireAuth(http.HandlerFunc(adminDeps.Capture)))
 
 	deps := httpx.CheckoutDeps{
 		Logger: lg, Queries: q, UseCase: uc, IDGen: idgen.NewDefault(),
-		PubKey: cfg.StripePublishableKey, Tokusho: tokusho,
+		PubKey: cfg.StripePublishableKey, StripeMock: cfg.StripeMockURL != "", Tokusho: tokusho,
 		WebhookHandler: webhookRecv, AdminMux: adminMux, SSE: sseHub,
 	}
 	secure := os.Getenv("KESSAI_INSECURE_COOKIE") == ""
@@ -179,6 +182,8 @@ func runMigrations(dsn string, lg interface {
 	}
 	var lastErr error
 	for _, path := range candidates {
+		path = filepath.Clean(path)
+		// #nosec G703 -- 候補パスは固定値と運用者が設定する環境変数のみで、外部入力を受けない
 		if _, err := os.Stat(path); err != nil {
 			lastErr = err
 			continue
@@ -199,3 +204,15 @@ func runMigrations(dsn string, lg interface {
 
 // migrateDSN pgx形式 postgres://... はそのままgolang-migrateのpostgresドライバでも動きます
 func migrateDSN(dsn string) string { return dsn }
+
+func newStripeClient(cfg config.Config, br *breaker.Breaker) stripeclient.Client {
+	if cfg.StripeMockURL == "" {
+		return stripeclient.New(cfg.StripeSecretKey, br)
+	}
+	backends := &stripe.Backends{
+		API: stripe.GetBackendWithConfig(stripe.APIBackend, &stripe.BackendConfig{
+			URL: stripe.String(cfg.StripeMockURL),
+		}),
+	}
+	return stripeclient.NewWithBackend(cfg.StripeSecretKey, backends, br)
+}

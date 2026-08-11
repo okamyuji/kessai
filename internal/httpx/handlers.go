@@ -2,10 +2,12 @@ package httpx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 
 	"github.com/okamyuji/kessai/internal/payment"
 	"github.com/okamyuji/kessai/internal/payment/stripeclient"
@@ -18,12 +20,13 @@ import (
 
 // CheckoutDeps CheckoutHandlerが必要とする依存
 type CheckoutDeps struct {
-	Logger  *slog.Logger
-	Queries *sqlc.Queries
-	UseCase *payment.UseCase
-	IDGen   idgen.Generator
-	PubKey  string
-	Tokusho templates.TokushoSnapshot
+	Logger     *slog.Logger
+	Queries    *sqlc.Queries
+	UseCase    *payment.UseCase
+	IDGen      idgen.Generator
+	PubKey     string
+	StripeMock bool
+	Tokusho    templates.TokushoSnapshot
 	// WebhookHandler Stripe Webhook 受信用のハンドラ（未指定なら404）
 	WebhookHandler http.Handler
 	// AdminMux 管理画面用サブルータ（未指定なら/admin配下は404）
@@ -91,7 +94,9 @@ func indexHandler(deps CheckoutDeps) http.HandlerFunc {
 		}
 		token := CSRFTokenFromContext(r.Context())
 		view := templates.ProductView{ID: p.ID, Name: p.Name, Price: amount}
-		if err := templates.CheckoutPage(deps.PubKey, view, deps.Tokusho, token).Render(r.Context(), w); err != nil {
+		// 冪等性キーはこの描画時に発行してフォームへ埋め込む。二重送信は同一キーの
+		// 再送となり、UseCase側のreplayで同じpayment_idに着地する（ADR-0007）
+		if err := templates.CheckoutPage(deps.PubKey, view, deps.Tokusho, token, deps.IDGen.New()).Render(r.Context(), w); err != nil {
 			deps.Logger.Error("render checkout", "err", err)
 		}
 	}
@@ -105,7 +110,10 @@ func tokushoHandler(deps CheckoutDeps) http.HandlerFunc {
 	}
 }
 
-// checkoutSubmitHandler POST /checkout: 冪等性キーを発行してPaymentIntent作成→/pay/:idへ302
+// idempotencyKeyRe サーバ発行キー（ULID）の形式。Crockford Base32の26文字
+var idempotencyKeyRe = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
+
+// checkoutSubmitHandler POST /checkout: フォームの冪等性キーでPaymentIntent作成→/pay/:idへ302
 func checkoutSubmitHandler(deps CheckoutDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -115,6 +123,11 @@ func checkoutSubmitHandler(deps CheckoutDeps) http.HandlerFunc {
 		productID := r.PostForm.Get("product_id")
 		if productID == "" {
 			problem.Validation("product_id必須").Write(w, deps.Logger)
+			return
+		}
+		idemKey := r.PostForm.Get("idempotency_key")
+		if !idempotencyKeyRe.MatchString(idemKey) {
+			problem.Validation("idempotency_keyが不正").Write(w, deps.Logger)
 			return
 		}
 		p, err := deps.Queries.GetProduct(r.Context(), productID)
@@ -128,7 +141,7 @@ func checkoutSubmitHandler(deps CheckoutDeps) http.HandlerFunc {
 			return
 		}
 		req := payment.StartCheckoutRequest{
-			IdempotencyKey: deps.IDGen.New(),
+			IdempotencyKey: idemKey,
 			ProductID:      productID,
 			Amount:         amount,
 			Actor:          "customer",
@@ -152,7 +165,7 @@ func confirmHandler(deps CheckoutDeps) http.HandlerFunc {
 			translatePaymentError(w, deps.Logger, err)
 			return
 		}
-		if renderErr := templates.ConfirmPage(deps.PubKey, clientSecret, paymentID, product, deps.Tokusho).Render(r.Context(), w); renderErr != nil {
+		if renderErr := templates.ConfirmPage(deps.PubKey, clientSecret, paymentID, product, deps.Tokusho, deps.StripeMock).Render(r.Context(), w); renderErr != nil {
 			deps.Logger.Error("render confirm", "err", renderErr)
 		}
 	}
@@ -186,12 +199,21 @@ func loadPaymentForConfirm(ctx context.Context, deps CheckoutDeps, paymentID str
 		return "", templates.ProductView{}, err
 	}
 	view := templates.ProductView{ID: prod.ID, Name: prod.Name, Price: amount}
-	if pay.StripePaymentIntentID == nil {
+	idem, err := deps.Queries.GetIdempotencyByPaymentID(ctx, &paymentID)
+	if err != nil {
+		return "", view, fmt.Errorf("get idempotency response: %w", err)
+	}
+	if idem.ResponseSnapshot == nil {
 		return "", view, errors.New("PaymentIntent未生成")
 	}
-	// 現状はテスト用にPaymentIntentIDをclient_secret位置に返す簡便実装。
-	// 本番接続時は idempotency_keys.response_snapshot からclient_secretを取り出す実装に差し替える。
-	return *pay.StripePaymentIntentID, view, nil
+	var checkout payment.StartCheckoutResult
+	if err := json.Unmarshal(idem.ResponseSnapshot, &checkout); err != nil {
+		return "", view, fmt.Errorf("decode checkout response: %w", err)
+	}
+	if checkout.ClientSecret == "" {
+		return "", view, errors.New("client_secret未保存")
+	}
+	return checkout.ClientSecret, view, nil
 }
 
 // translatePaymentError payment/usecase の型エラーをRFC 9457へ変換

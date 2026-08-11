@@ -99,20 +99,20 @@ Stripeサンドボックス（Webhook はStripe CLIでローカル転送）
 3. API層が同一リクエスト内でStripe PaymentIntent作成をCircuit Breaker経由・派生キー`{key}:create`付きで同期呼び出しし、得た`client_secret`を`response_snapshot`へ保存してブラウザへ返します。3DS確認（FR-A3）にはこの同期返却が必須です。タイムアウト時は同一派生キーで再送し、結果のみを取得します。
 4. Circuit Breakerがopenの場合やStripe障害時は`psp-unavailable`（503、5章）を返し、購入者は後で再試行します。`payments`行はcreatedのまま残り、`checkout_expiry_minutes`経過でhousekeepingが失効させます。
 5. ブラウザはStripeのトークン化フォームで3DS認証を含む確認を完了します。
-6. 結果はWebhook（2.1.1の対応表）で受信し、状態遷移と台帳記帳をOutbox経由で行います。キャプチャ・返金のStripe呼び出しと後続処理（台帳記帳、SSE配信）が非同期・リトライ可能な部分です。
+6. 結果はWebhook（2.1.1の対応表）で受信し、状態遷移と台帳記帳をOutbox経由で行います。Webhook受信後の後続処理（状態遷移、台帳記帳、SSE配信）が非同期・リトライ可能な部分です。
 
-PaymentIntent作成だけを同期にするのは`client_secret`の返却がチェックアウト継続の前提だからです。それ以外の外部呼び出しはすべてOutbox経由の非同期で、Stripe障害からの復旧後に自動で追いつきます（NFR-2）。
+PaymentIntent作成を同期にするのは`client_secret`の返却がチェックアウト継続の前提だからです。キャプチャと返金のAPI呼び出しも管理者応答に結果を返すため同期です（キャプチャはFR-A2の管理画面操作、返金は4.5節）。Webhook受信後の後続処理はOutbox経由の非同期で、Stripe障害からの復旧後に自動で追いつきます（NFR-2）。
 
 ### 4.2 Webhook受信（FR-B2）
 
 1. 生ボディで署名を検証します。不正は400です。
-2. `webhook_events`へINSERTします。`stripe_event_id`の一意制約違反（再配信）は200を返して終了します。
-3. Outboxへ処理イベントを追記し、即時200を返します。重い処理はここで行いません。
+2. `webhook_events`へのINSERTとOutboxへの処理イベント追記を同一DBトランザクションで行い、即時200を返します。重い処理はここで行いません。片方だけ成功して残ると、再配信が重複扱いで200を返しイベントが失われるため、原子性が必須です。
+3. `stripe_event_id`の一意制約違反（再配信）はロールバックして200を返します。
 4. リレーワーカーが状態遷移・台帳記帳・SSE配信を実行します。1件のWebhookが複数の遷移に対応する場合（2.1.1の対応表で自動キャプチャ時の`payment_intent.succeeded`がAuthorizeSucceededとCaptureに展開される場合）は、リレーワーカーが遷移イベント列を導出し、同一DBトランザクションで遷移テーブルを順に通して適用します。
 
 ### 4.3 Outboxリレー（ADR-0009、NFR-3）
 
-`SELECT ... FOR UPDATE SKIP LOCKED`で`pending`かつ`next_attempt_at <= now()`のイベントを取得し、実行します。失敗時は`retry_count`をインクリメントし、`2^(retry_count-1)`分（1分、2分、4分、8分、16分、32分）の指数バックオフで`next_attempt_at`を更新します。6回目の失敗で`failed`とし、管理画面に表示します（FR-C3）。処理は消費側冪等（NFR-3）を前提とし、台帳記帳は決定的に導出した`transfer_id`と`UNIQUE(transfer_id, side)`制約への`ON CONFLICT DO NOTHING`で二重記帳を防ぎます（3章）。
+`SELECT ... FOR UPDATE SKIP LOCKED`で`pending`かつ`next_attempt_at <= now()`のイベントを取得し、実行します。失敗時は`retry_count`をインクリメントし、`2^(retry_count-1)`分（1分、2分、4分、8分、16分）の指数バックオフで`next_attempt_at`を更新します。6回目の失敗で`failed`とし、管理画面に表示します（FR-C3）。初回を含む試行は最大6回で、再スケジュールは5回です（32分のバックオフには到達しません）。処理は消費側冪等（NFR-3）を前提とし、台帳記帳は決定的に導出した`transfer_id`と`UNIQUE(transfer_id, side)`制約への`ON CONFLICT DO NOTHING`で二重記帳を防ぎます（3章）。
 
 Webhookの順序逆転（例: `charge.refunded`が`payment_intent.succeeded`より先に処理される）で遷移テーブル違反になった場合、対象`payments`が非終端状態なら一時的な順序問題とみなして通常のリトライへ回し、終端状態なら恒久的な不正として`failed`に記録します。この判定規則により、順序逆転の自己回復と真の不正遷移の検出を両立します。
 
@@ -124,7 +124,9 @@ Webhookの順序逆転（例: `charge.refunded`が`payment_intent.succeeded`よ�
 
 1. 管理者が返金画面で金額・理由を入力し確認モーダルで確定します（CSRFトークン必須、NFR-5）。
 2. 遷移テーブルで`RefundPartial`/`RefundFull`の可否と金額上限を検証し、`audit_logs`へ操作を記録します（FR-D5）。
-3. Outbox経由でStripeの返金APIを派生キー`{key}:refund:{返金連番}`付きで呼び（ADR-0007）、Webhookの返金完了イベントで状態遷移と台帳記帳（refunds勘定）を行います。
+3. 返金連番を台帳の返金行数から決定的に導出し、派生キー`{payment_id}:refund:{返金連番}`でStripeの返金APIを同期呼び出しします（ADR-0007）。
+4. Stripe成功後、同一DBトランザクションで`refunded_jpy`加算・状態遷移・台帳記帳（refunds勘定、`transfer_id`は`{payment_id}:refund:{返金連番}`）・監査ログ記録を反映します。
+5. Stripe成功後にDB反映が失敗した場合、再実行では台帳が未記帳のため同じ返金連番と同じ派生キーが導出され、Stripe側の冪等性で二重返金を防ぎます。
 
 ## 5. エラー設計（ADR-0012）
 
@@ -138,6 +140,7 @@ JSON APIのエラーは`application/problem+json`で返します。type URIカ�
 | /problems/refund-exceeds-amount | 422 | 返金累計が取引金額を超過 | false |
 | /problems/psp-unavailable | 503 | Circuit Breakerがopen | true |
 | /problems/validation | 400 | 入力検証エラー | false |
+| /problems/rate-limited | 429 | ログイン試行のレート制限超過 | true |
 | /problems/unauthorized | 401 | 未認証 | false |
 
 `detail`には内部情報（SQL、スタックトレース、Stripeの生エラー）を含めません。htmxへ返す画面断片のエラーは部分テンプレートで表現し、この形式の対象外です。

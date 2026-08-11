@@ -22,9 +22,15 @@ import (
 	"github.com/okamyuji/kessai/internal/platform/sqlc"
 )
 
+// Pool トランザクションを開始できる接続。pgxpool.Poolが満たす
+type Pool interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // Receiver Webhookハンドラの依存
 type Receiver struct {
 	Logger        *slog.Logger
+	Pool          Pool
 	Queries       *sqlc.Queries
 	IDGen         idgen.Generator
 	SigningSecret string
@@ -33,9 +39,10 @@ type Receiver struct {
 
 // New Verifyに stripe-go の ConstructEvent を注入した Receiver を返します。
 // テストではVerifyを差し替えて署名検証をスキップ・ダミー化できます。
-func New(logger *slog.Logger, q *sqlc.Queries, ids idgen.Generator, secret string) *Receiver {
+func New(logger *slog.Logger, pool Pool, q *sqlc.Queries, ids idgen.Generator, secret string) *Receiver {
 	return &Receiver{
 		Logger:        logger,
+		Pool:          pool,
 		Queries:       q,
 		IDGen:         ids,
 		SigningSecret: secret,
@@ -67,11 +74,18 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// record webhook_eventsへ挿入し、成功時はOutboxへ処理イベントを追記します。
-// 再配信はstripe_event_id一意制約で0行になり、pgx.ErrNoRowsを返します。
+// record webhook_eventsへの挿入とOutboxへの処理イベント追記を同一トランザクションで行います。
+// 片方だけ成功して残ると、再配信が重複扱いで200を返しイベントが永久に処理されないため、原子性が必須です。
+// 再配信はstripe_event_id一意制約で0行になり、pgx.ErrNoRowsを受けて成功扱いにします。
 func (r *Receiver) record(ctx context.Context, evt stripe.Event, raw []byte) error {
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	qTx := r.Queries.WithTx(tx)
 	// jsonb格納用にpayloadは既にJSONバイト列（raw body）
-	inserted, err := r.Queries.TryInsertWebhookEvent(ctx, sqlc.TryInsertWebhookEventParams{
+	inserted, err := qTx.TryInsertWebhookEvent(ctx, sqlc.TryInsertWebhookEventParams{
 		ID:            r.IDGen.New(),
 		StripeEventID: evt.ID,
 		EventType:     string(evt.Type),
@@ -90,12 +104,12 @@ func (r *Receiver) record(ctx context.Context, evt stripe.Event, raw []byte) err
 		"webhook_event_id": inserted.ID,
 		"stripe_event_id":  evt.ID,
 	})
-	if _, err := r.Queries.EnqueueOutboxEvent(ctx, sqlc.EnqueueOutboxEventParams{
+	if _, err := qTx.EnqueueOutboxEvent(ctx, sqlc.EnqueueOutboxEventParams{
 		ID:        r.IDGen.New(),
 		EventType: string(evt.Type),
 		Payload:   payload,
 	}); err != nil {
 		return fmt.Errorf("EnqueueOutboxEvent: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }

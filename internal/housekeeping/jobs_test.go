@@ -73,6 +73,42 @@ func seedPayment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, state st
 	return paymentID
 }
 
+// dupIDGen 常に同じIDを返すスタブ（履歴INSERTのPK衝突を意図的に起こす）
+type dupIDGen struct{ id string }
+
+func (g *dupIDGen) New() string { return g.id }
+
+// TestHousekeeping_ExpireAtomic 履歴INSERT失敗時に状態更新もロールバックされることを検証する
+func TestHousekeeping_ExpireAtomic(t *testing.T) {
+	pool := requirePG(t)
+	ctx := context.Background()
+	q := sqlc.New(pool)
+	old := time.Now().Add(-2 * time.Hour)
+	paymentID := seedPayment(t, ctx, pool, "created", old)
+	// 事前にpayment_transitionsへ行を入れ、同じIDでの履歴INSERTを失敗させる
+	otherPayment := seedPayment(t, ctx, pool, "captured", time.Now())
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO payment_transitions (id, payment_id, from_state, to_state, event, actor)
+		 VALUES ('DUP-TRANSITION-ID', $1, 'authorized'::payment_state, 'captured'::payment_state, 'Capture', 'webhook')`,
+		otherPayment); err != nil {
+		t.Fatalf("seed transition: %v", err)
+	}
+	r := housekeeping.New(q, &housekeeping.PoolAdapter{Pool: pool}, &dupIDGen{id: "DUP-TRANSITION-ID"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		housekeeping.ExpiryPolicy{CheckoutExpiryMinutes: 60, AuthExpiryDays: 21})
+
+	if _, err := r.RunOnce(ctx); err == nil {
+		t.Fatalf("履歴INSERT失敗でエラーが返らない")
+	}
+	pay, err := q.GetPayment(ctx, paymentID)
+	if err != nil {
+		t.Fatalf("get payment: %v", err)
+	}
+	if string(pay.State) != "created" {
+		t.Fatalf("履歴INSERT失敗なのに状態が%sへ変わっている（原子性違反）", pay.State)
+	}
+}
+
 // 期限切れ idempotency_keys の削除
 func TestHousekeeping_DeletesExpiredIdempotency(t *testing.T) {
 	pool := requirePG(t)
