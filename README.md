@@ -129,8 +129,8 @@ make lint        # doclint/gofmt/vet/golangci-lint/staticcheck/govulncheck/build
 ### E2E
 
 ```bash
-cd test/e2e && npm install && npx playwright install chromium
-KESSAI_BASE_URL=http://127.0.0.1:8080 npm test
+cd test/e2e && pnpm install && pnpm exec playwright install chromium
+KESSAI_BASE_URL=http://127.0.0.1:8080 pnpm test
 ```
 
 ## Makefile コマンド
