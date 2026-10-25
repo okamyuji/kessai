@@ -1,6 +1,6 @@
 module github.com/okamyuji/kessai
 
-go 1.26.5
+go 1.26.10
 
 require (
 	github.com/a-h/templ v0.3.1020
