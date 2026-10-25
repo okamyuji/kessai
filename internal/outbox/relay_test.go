@@ -141,6 +141,8 @@ func TestRelay_HandlerFailsUntilMax_MarksFailed(t *testing.T) {
 	r := outbox.New(pool, q, handler, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	r.MaxRetries = 2                                 // MaxRetries=2でRunOnceを2回呼べば failed になる
 	r.Backoff = func(int) time.Duration { return 0 } // 即再取得可能に
+	// 取得条件はDBのnow()で比べるため、DBコンテナの時計がホストより遅れても再取得できるよう過去に固定する
+	r.Now = func() time.Time { return time.Now().Add(-time.Minute) }
 
 	for range 3 {
 		_, _ = r.RunOnce(ctx)
