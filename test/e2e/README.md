@@ -11,14 +11,14 @@
 
 ```bash
 cd test/e2e
-npm install
-npx playwright install chromium
+pnpm install
+pnpm exec playwright install chromium
 ```
 
 ## 実行
 
 ```bash
-KESSAI_BASE_URL=http://127.0.0.1:8080 npx playwright test
+KESSAI_BASE_URL=http://127.0.0.1:8080 pnpm exec playwright test
 ```
 
 ## Stripeテストカードで実際に決済を通す
