@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	stripe "github.com/stripe/stripe-go/v86"
+	stripe "github.com/stripe/stripe-go/v87"
 
 	"github.com/okamyuji/kessai/internal/payment/stripeclient"
 	"github.com/okamyuji/kessai/internal/platform/breaker"

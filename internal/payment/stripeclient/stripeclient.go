@@ -1,7 +1,7 @@
 // Package stripeclient Stripe APIとの薄いアダプタです。
 // - Circuit Breakerで外部呼び出しを保護（ADR-0010）
 // - 冪等性キーはStripeのIdempotency-Keyヘッダに引き継ぎ（ADR-0007）
-// - stripe-go v86 の新API（stripe.NewClient + V1系サービス）を使います
+// - stripe-go v87 の新API（stripe.NewClient + V1系サービス）を使います
 // カード情報は取り扱いません。PaymentIntent作成のみで、確認はブラウザ側のStripe.jsが行います。
 package stripeclient
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 
-	stripe "github.com/stripe/stripe-go/v86"
+	stripe "github.com/stripe/stripe-go/v87"
 
 	"github.com/okamyuji/kessai/internal/payment/idempotency"
 	"github.com/okamyuji/kessai/internal/platform/breaker"
@@ -95,10 +95,10 @@ func (c *realClient) CreatePaymentIntent(ctx context.Context, req CreateIntentRe
 	}
 	amount := req.Amount.Int64()
 	params := &stripe.PaymentIntentCreateParams{
-		Amount:             &amount,
-		Currency:           stripe.String(string(stripe.CurrencyJPY)),
-		PaymentMethodTypes: stripe.StringSlice([]string{"card"}),
-		Description:        stripe.String(req.Description),
+		Amount:                    &amount,
+		Currency:                  stripe.String(string(stripe.CurrencyJPY)),
+		AllowedPaymentMethodTypes: stripe.StringSlice([]string{"card"}),
+		Description:               stripe.String(req.Description),
 	}
 	if req.CaptureMode == "manual" {
 		params.CaptureMethod = stripe.String(string(stripe.PaymentIntentCaptureMethodManual))

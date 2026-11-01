@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	stripe "github.com/stripe/stripe-go/v86"
+	stripe "github.com/stripe/stripe-go/v87"
 
 	"github.com/okamyuji/kessai/internal/platform/idgen"
 	"github.com/okamyuji/kessai/internal/platform/sqlc"
