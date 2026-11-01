@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -93,5 +95,56 @@ func TestLoad_NonPositiveInt(t *testing.T) {
 	_, err := config.Load()
 	if err == nil || !strings.Contains(err.Error(), "CHECKOUT_EXPIRY_MINUTES") {
 		t.Fatalf("CHECKOUT_EXPIRY_MINUTES非正数を検出すべき: err=%v", err)
+	}
+}
+
+// 例のファイルに載っている署名鍵はリポジトリを読めば誰でも分かるので、そのまま使えば偽造されたセッションを通してしまう
+func TestLoad_RejectsPublishedExampleSessionKeys(t *testing.T) {
+	examples := map[string]*regexp.Regexp{
+		"../../../.env.example":                              regexp.MustCompile(`(?m)^SESSION_SIGNING_KEY=(\S+)$`),
+		"../../../deploy/terraform/terraform.tfvars.example": regexp.MustCompile(`(?m)^session_signing_key\s*=\s*"([^"]+)"`),
+		"../../../deploy/terraform/README.md":                regexp.MustCompile(`(?m)^session_signing_key\s*=\s*"([^"]+)"`),
+	}
+	for path, re := range examples {
+		t.Run(path, func(t *testing.T) {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			m := re.FindSubmatch(b)
+			if m == nil {
+				t.Fatalf("%s に SESSION_SIGNING_KEY の例が見つからない", path)
+			}
+			setEnv(t, fullEnv)
+			t.Setenv("SESSION_SIGNING_KEY", string(m[1]))
+			_, err = config.Load()
+			if err == nil || !strings.Contains(err.Error(), "SESSION_SIGNING_KEY") {
+				t.Fatalf("%s の例の鍵を拒否すべき: err=%v", path, err)
+			}
+			if strings.Contains(err.Error(), string(m[1])) {
+				t.Fatalf("エラーに鍵の値を含めてはいけない: %v", err)
+			}
+		})
+	}
+}
+
+// .env.example の初期管理者パスワードのまま起動すると、公開されたパスワードの管理者が作られる
+func TestLoad_RejectsExampleAdminInitialPassword(t *testing.T) {
+	b, err := os.ReadFile("../../../.env.example")
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^ADMIN_INITIAL_PASSWORD=(\S+)$`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal(".env.example に ADMIN_INITIAL_PASSWORD の例が見つからない")
+	}
+	setEnv(t, fullEnv)
+	t.Setenv("ADMIN_INITIAL_PASSWORD", string(m[1]))
+	_, err = config.Load()
+	if err == nil || !strings.Contains(err.Error(), "ADMIN_INITIAL_PASSWORD") {
+		t.Fatalf("例の初期管理者パスワードを拒否すべき: err=%v", err)
+	}
+	if strings.Contains(err.Error(), string(m[1])) {
+		t.Fatalf("エラーにパスワードの値を含めてはいけない: %v", err)
 	}
 }

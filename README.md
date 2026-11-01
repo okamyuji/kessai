@@ -77,6 +77,9 @@ docker compose ps
 
 ```bash
 cp .env.example .env
+# SESSION_SIGNING_KEYとADMIN_INITIAL_PASSWORDは例の値のままでは起動しないので置き換える
+sed -i.bak "s/^SESSION_SIGNING_KEY=.*/SESSION_SIGNING_KEY=$(openssl rand -hex 32)/" .env && rm .env.bak
+# ADMIN_INITIAL_PASSWORDは.envを開いて自分のパスワードに書き換える
 ```
 
 ```dotenv
