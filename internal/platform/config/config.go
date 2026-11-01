@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -26,6 +27,17 @@ type Config struct {
 	AdminInitialPassword  string // 初期作成後は削除可能
 	SessionSigningKey     string
 }
+
+// 例のファイル（.env.example、deploy/terraform の tfvars の例と README）に載せた鍵。
+// リポジトリを読めば誰でも分かるので、署名鍵に使うとセッションを偽造される。例を変えたらここも変える
+var exampleSessionSigningKeys = []string{
+	"change-me-to-a-random-string-of-32-or-more-chars",
+	"generate-32bytes-random-string-here!!",
+	"please-generate-32bytes-random-string!!",
+}
+
+// .env.example に載せた初期管理者パスワード。このまま起動すると、誰でも知っているパスワードの管理者が作られる
+const exampleAdminInitialPassword = "please-change-me"
 
 // Load 環境変数から設定を読み込み、必須項目の欠落や不正値をまとめて返します。
 // 値そのものはエラーに含めません。
@@ -70,11 +82,17 @@ func Load() (Config, error) {
 		SessionSigningKey:     get("SESSION_SIGNING_KEY", true),
 	}
 
+	if cfg.AdminInitialPassword == exampleAdminInitialPassword {
+		invalid = append(invalid, "ADMIN_INITIAL_PASSWORD(例の値のまま)")
+	}
 	if cfg.CaptureMode != "manual" && cfg.CaptureMode != "auto" {
 		invalid = append(invalid, "CAPTURE_MODE")
 	}
-	if len(cfg.SessionSigningKey) < 32 {
+	switch {
+	case len(cfg.SessionSigningKey) < 32:
 		invalid = append(invalid, "SESSION_SIGNING_KEY(32文字以上)")
+	case slices.Contains(exampleSessionSigningKeys, cfg.SessionSigningKey):
+		invalid = append(invalid, "SESSION_SIGNING_KEY(例の値のまま。openssl rand -hex 32 で生成する)")
 	}
 
 	if len(missing) > 0 || len(invalid) > 0 {

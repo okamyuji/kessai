@@ -12,7 +12,7 @@
 
 ## 変数
 
-`terraform.tfvars` に少なくとも以下を設定してください。
+`terraform.tfvars` に少なくとも以下を設定してください。`session_signing_key` は `openssl rand -hex 32` で生成します。例の値のままではアプリが起動しません。
 
 ```hcl
 stripe_secret_key      = "sk_test_xxxxx"

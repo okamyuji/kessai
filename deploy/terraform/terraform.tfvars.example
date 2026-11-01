@@ -3,4 +3,5 @@ stripe_secret_key      = "sk_test_replace_me"
 stripe_publishable_key = "pk_test_replace_me"
 stripe_webhook_secret  = "whsec_replace_me"
 admin_email            = "admin@example.com"
+# 例の値のままではアプリが起動しない。openssl rand -hex 32 で生成した値にする
 session_signing_key    = "generate-32bytes-random-string-here!!"
