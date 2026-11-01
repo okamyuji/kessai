@@ -13,6 +13,15 @@ jobs:
     permissions:
       contents: read
     uses: okamyuji/reusable-workflows/.github/workflows/go-ci.yml@v1
+  e2e-typecheck:
+    permissions:
+      contents: read
+    uses: okamyuji/reusable-workflows/.github/workflows/node-ci.yml@v1
+    with:
+      node-version: "24"
+      working-directory: test/e2e
+      # E2E の本体はサーバーと DB が要るので、ここでは型の検査だけを動かし、test は Playwright が入ったことだけを見る
+      test-command: "exec playwright --version"
   security:
     permissions:
       contents: read
