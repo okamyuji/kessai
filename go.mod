@@ -3,9 +3,9 @@ module github.com/okamyuji/kessai
 go 1.26.10
 
 require (
-	github.com/a-h/templ v0.3.1020
-	github.com/golang-migrate/migrate/v4 v4.19.1
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/a-h/templ v0.3.1100
+	github.com/golang-migrate/migrate/v4 v4.20.1
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/stripe/stripe-go/v87 v87.0.0
