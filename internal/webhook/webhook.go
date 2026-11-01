@@ -14,8 +14,8 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
-	stripe "github.com/stripe/stripe-go/v86"
-	"github.com/stripe/stripe-go/v86/webhook"
+	stripe "github.com/stripe/stripe-go/v87"
+	"github.com/stripe/stripe-go/v87/webhook"
 
 	"github.com/okamyuji/kessai/internal/platform/idgen"
 	"github.com/okamyuji/kessai/internal/platform/problem"

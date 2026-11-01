@@ -26,7 +26,7 @@ Goアプリ（cmd/server）
   ├─ internal/payment           決済ユースケース・状態遷移テーブル
   │   ├─ statemachine           8状態×7イベントの遷移テーブル駆動
   │   ├─ idempotency            マスターキー→操作別派生キー
-  │   ├─ stripeclient           stripe-go v86の薄いラッパ（Breaker連携）
+  │   ├─ stripeclient           stripe-go v87の薄いラッパ（Breaker連携）
   │   └─ outboxhandler          Stripeイベント→状態遷移+複式簿記記帳
   ├─ internal/ledger            複式簿記台帳（append-only、決定的transfer_id）
   ├─ internal/webhook           Stripe Webhook受信・署名検証・冪等記録
